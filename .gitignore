@@ -3,6 +3,16 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+#Pycharm 
+.idea/
+
+#Mac
+.DS_Store
+
+#Log
+log*.txt
+
+
 # C extensions
 *.so
 
