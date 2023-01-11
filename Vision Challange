@@ -1,0 +1,338 @@
+    #        encoder_1() encoder(2)
+    # This function reads the 4 byte value from encoder 1 and converts to an integer
+    # This value is saved as a variable "encoder1"
+    # x55 selects I2C, MD25 base address xB0 (B1 to read), encoder data x02-x05, 1byte
+    # x02 - 05  are the registers for the four encoder bytes
+    # Read hibyte first to capture count for lower bytes
+    # x01 is number of bytes (1) to be read from each register
+
+
+
+    def encoder_1(self):
+        # print "reading encoder 1"
+        # MD25 is a single byte register device. Handles auto-increment of register address
+        # select I2C device (x55), register to start read from (x02) and number of bytes (x04)
+        self.ser.write(b"\x55\xB1\x02\x04")  # b required to change unicode to bytes
+        n = self.ser.read(4)  # read four bytes corresponding to encoder1 (4 values)
+        Enc1byte3 = (n[0])  # hi byte
+        Enc1byte2 = (n[1])
+        Enc1byte1 = (n[2])
+        Enc1byte0 = (n[3])  # lo byte
+        encoder1 = Enc1byte0 + (Enc1byte1 << 8) + (Enc1byte2 << 16) + (Enc1byte3 << 24)
+        # print ("encoder1 =", encoder1)
+        return encoder1
+
+
+
+    # _______________________________________________________________________________
+    # This function reads the 4 byte value from encoder 2 and converts to an integer
+    # This value is saved as a variable "encoder2"
+
+
+
+    def encoder_2(self):
+        # print "reading encoder 2"
+        # MD25 is a single byte register device. Handles auto-increment of address
+        # select I2C device (x55), register to start read from (x06) and number of bytes (x04)
+        self.ser.write(b"\x55\xB1\x06\x04")  # b required to change unicode to bytes
+        n = self.ser.read(4)  # read four bytes corresponding to encoder2 (4 values)
+        Enc2byte3 = (n[0])
+        Enc2byte2 = (n[1])
+        Enc2byte1 = (n[2])
+        Enc2byte0 = (n[3])
+        encoder2 = Enc2byte0 + (Enc2byte1 << 8) + (Enc2byte2 << 16) + (Enc2byte3 << 24)
+        # print ("encoder2 =", encoder2)
+        return encoder2
+
+
+
+    # _______________________________________________________________________________
+    #   set_acel_rate(acelrate)
+    # This function sets the motor acceleration rate, range 1 to 10 fastest
+    # Do NOT set to higher than 5(default)
+    # x55 selectsI2C, MD25 base address xB0, command accel rate reg x10, 1byte, accelrate
+    # x03 sets rate to 3 full revers to full forward in 2.1 seconds
+    def set_acel_rate(self, acelrate):
+
+
+
+        self.ser.write(b"\x55\xB0\x10\x01\x05")  # b required to change unicode to bytes
+        n = self.ser.read(1)  # get acknowledge
+        resp = str(n[0])  # 0 is not OK (0) !0 is OK (1)
+        time.sleep(.1)
+        if resp != 0:
+            print("Accel rate set at ", acelrate)
+        return
+
+
+
+    def drive_speed_distance(self, speed, distance):
+        # nominal speed of robot at speed 32 = 25cm/s (at speed 32)
+        # adjust for accel/decel times etc nd add a 1 second margin
+        if speed != 0:
+            drive_timeout_time = (((distance * 32) / 22) / abs(speed)) + 2
+        else:
+            drive_timeout_time = 15.0  # default drive timeout time
+        if distance <= 0:
+            distance = 0
+            move = False
+            return
+        drive_time_out = False  # Flag set as True if time-out occurs
+        print("in drive_speed_distance. Will reset both encoders")
+        # convert distance to an encoder value
+        required_distance_encoder_value = int((distance / (self.wheel_diameter * 3.142)) * 360)
+        self.sleep(.1)
+        # start motors
+        # drives with 0 turn at speed set by "speed"
+        time_started_drive = time.time()  # gets time when drive was started
+        self.drive_sync(speed, 0)  # start motors
+        # THIS DELAY IS ESSENTIAL TO CORRECT OPERATION, OR IS IT ??????
+        self.sleep(.1)
+        # If speed > 0 (OK but if <0 then need to correct encoder for -ve values)
+        move = False
+        if speed > 0:
+            while (self.encoder_1() < required_distance_encoder_value \
+                   or self.encoder_2() < required_distance_encoder_value) \
+                    and ((time.time() - time_started_drive) < drive_timeout_time):  # check drive timeout 15secs
+                # print("in drive_speed_distance, encoder1 ",encoder_1())
+                move = True
+        elif speed < 0:
+            while ((self.encoder_1()) > (self.max_encoder - required_distance_encoder_value) \
+                   or (self.encoder_2()) > (self.max_encoder - required_distance_encoder_value)) \
+                    and ((time.time() - time_started_drive) < drive_timeout_time):  # check drive timeout 15secs:
+                move = True
+        if (time.time() - time_started_drive) > drive_timeout_time:
+            move = False
+            drive_time_out = True
+            print("Calculated drive time-out = ", drive_timeout_time)
+            print("Drive timed out in ", (time.time() - time_started_drive), " secs")
+
+
+
+        else:
+            move = False
+        # demanded distance achieved, stop motors
+        self.motor_stop()
+        # print ("Calculated drive time-out = ", drive_timeout_time)
+        # print ("Time for drive = ", (time.time() - time_started_drive), " secs")
+        # print ("Finished drive_speed_distance")
+        # print ("encoder 1  value = ",encoder_1())
+        # print ("encoder 2  value = ",encoder_2())
+        return
+
+
+
+    def motor_stop(self):
+        self.ser.write(b"\x55\xB0\x00\x02\x80\x80")  # b required to change unicode to bytes
+        n = self.ser.read(1)  # get acknowledge
+        time.sleep(.1)
+        # reset encoders elsewhere if required
+        return
+
+
+
+    def turn_speed_angle(self, speed, angle):
+        # nominal rotation speed of robot at speed 32 = 37.5 degrees/s (at speed 32)
+        # adjust for accel/decel times etc and add a 2 second margin
+        if speed != 0:
+            turn_timeout_time = (((angle * 32) / 60) / abs(speed)) + 3
+        else:
+            turn_timeout_time = 15.0  # default drive timeout time
+        turn_time_out = False
+        # convert angle to an encoder value
+        # Rotation disc circumference  = wheelspace * pi
+        # wheel circumference = wheel_diameter * pi
+        # number of wheel rotations per 360 degree turn = disc circ / wheel circ
+        # This also equals encoder value per  1 degree of turn
+        # optimised for speed 16
+        print("I am in turn_speed_angle")
+        if angle == 0:
+            return
+        angle_encoder = float(self.wheelspace / self.wheel_diameter)
+        # reset encoders to 0
+        self.reset_both_encoders()
+        time.sleep(.1)
+        # call function to turn on motors and start turn
+        # central axis turn at rate set by speed
+        time_started_turn = time.time()  # gets time when turn was started
+        self.drive_sync(0, speed)
+        time.sleep(.3)
+        # select encoder which has increasing value
+        if speed < 0:
+            # correction factor for clockwise turn Default set to 1
+            angle = angle / 1.0
+            while self.encoder_2() < int(angle_encoder * angle) \
+                    and ((time.time() - time_started_turn) < turn_timeout_time):  # check drive timeout 10secs:
+                move = True
+            self.motor_stop()
+            time.sleep(.1)
+        elif speed > 0:
+            # correction factor for anti-clockwise turn. 1 = no correction
+            angle = angle / 1.0
+            while self.encoder_1() < int(angle_encoder * angle) \
+                    and ((time.time() - time_started_turn) < turn_timeout_time):  # check drive timeout 10secs:
+                move = True
+            self.motor_stop()
+            time.sleep(.1)
+
+
+
+        if (time.time() - time_started_turn) > turn_timeout_time:  # set turn_time_out_flag
+            self.motor_stop()
+            move = False
+            turn_time_out = True
+            print("Turn timed out in ", (time.time() - time_started_turn), " secs")
+            return
+        else:
+            move = False
+            self.motor_stop()
+        # print ("Calculated drive time-out = ", turn_timeout_time)
+        # print ("Time for drive = ", (time.time() - time_started_turn), " secs")
+        return
+
+
+
+    def rotate(self, angle, radians=False):
+        if radians:
+            angle = angle * (180/math.pi)
+        clockwise = angle < 0
+        power = self.turn_power * (abs(angle)/90)
+        if clockwise:
+            powers = (power, 0)
+        else:
+            powers = (0, power)
+        self.change_motor_power(powers)
+        self.move(1)
+        self.halt()
+
+
+
+    def turn_right(self):
+        self.rotate(-90)
+
+
+
+    def turn_left(self):
+        self.rotate(90)
+
+
+
+    def get_markers(self):
+        return self.camera.see()
+
+
+
+    def get_marker_ids(self):
+        return self.camera.see_ids()
+
+
+
+    def find(self, target=7):
+        found = False
+        while not found:
+            markers = self.get_markers()
+            print(markers)
+            for marker in markers:
+                if marker.id == target:
+                    return marker
+            self.rotate(-15)
+            self.move_forward(1000)
+
+
+
+
+    def adjust(self, marker):
+        self.turn_left()
+        dist = marker.distance
+        phi = marker.spherical.rot_y
+        to_move = dist * math.sin(abs(phi))
+        self.move_forward(to_move)
+        yaw = marker.orientation.yaw
+        self.rotate(yaw, radians=True)
+        to_move = dist * math.cos(abs(phi)) * math.sin(abs(yaw))
+        self.move_forward(to_move)
+        self.turn_right()
+
+
+
+    def test_led(self):
+        R.kch.leds[UserLED.A] = Colour.RED
+        self.sleep(2)
+        R.kch.leds[UserLED.A] = Colour.OFF
+        self.sleep(2)
+        R.kch.leds[UserLED.B] = Colour.CYAN
+        self.sleep(2)
+        R.kch.leds[UserLED.B] = Colour.OFF
+        self.sleep(2)
+        R.kch.leds[UserLED.C] = Colour.MAGENTA
+        self.sleep(2)
+        R.kch.leds[UserLED.C] = Colour.OFF
+
+
+
+    def change_led(self, name, colour):
+        R.kch.leds[self.LEDs[name.upper()]] = self.Colours[colour.upper()]
+
+
+
+    def vision_challenge_1(self):
+        while True:
+            self.turn_speed_angle(5, 10)
+            ids = self.get_marker_ids()
+            if 7 in ids:
+            #if 7 in ids and 8 in ids:
+                self.change_led("A", "BLUE")
+                self.change_led("B", "OFF")
+                self.change_led("C", "OFF")
+            elif 8 in ids:
+            #elif 7 in ids and 8 in ids and 9 in ids:
+                self.change_led("A", "OFF")
+                self.change_led("B", "BLUE")
+                self.change_led("C", "OFF")
+            elif 9 in ids:
+            #elif 8 in ids and 9 in ids:
+                self.change_led("A", "OFF")
+                self.change_led("B", "OFF")
+                self.change_led("C", "BLUE")
+
+
+
+    def vision_challenge_2(self):
+        while True:
+            ids = self.get_marker_ids()
+            if 8 in ids:
+                markers = self.get_markers()
+                for marker in markers:
+                    if marker.id == 8:
+                        middle_angle = marker.spherical.rot_y
+                    # elif marker.id == 7:
+                    #     left_angle = marker.spherical.rot_y
+                    # elif marker.id == 9:
+                    #     right_angle = marker.spherical.rot_y
+                if abs(middle_angle) < self.middle_threshold:
+                    self.change_led("A", "OFF")
+                    self.change_led("B", "BLUE")
+                    self.change_led("C", "OFF")
+                elif middle_angle > 0:
+                    self.change_led("A", "RED")
+                    self.change_led("B", "OFF")
+                    self.change_led("C", "OFF")
+                elif middle_angle < 0:
+                    self.change_led("A", "OFF")
+                    self.change_led("B", "OFF")
+                    self.change_led("C", "RED")
+                else:
+                    self.change_led("A", "OFF")
+                    self.change_led("B", "BLUE")
+                    self.change_led("C", "OFF")
+
+
+
+            else:
+                raise Exception("8 is not in the vision")
+
+
+
+
+R = SherborneRobot()
+R.vision_challenge_2()
